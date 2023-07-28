@@ -101,6 +101,7 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
 
     } 
     else if call.method == "connect"{
+        print("Connectiong with printer ...")
         let macAddress = call.arguments as! String 
         // Busca el dispositivo con la dirección MAC dada
         let peripherals = centralManager?.retrievePeripherals(withIdentifiers: [UUID(uuidString: macAddress)!])
@@ -114,7 +115,7 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
         centralManager?.connect(peripheral, options: nil)
 
         // Verifica si la conexión fue exitosa después de un tiempo de espera
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             if peripheral.state == .connected {
                 //print("Conexión exitosa con el dispositivo \(peripheral.name ?? "Desconocido")")
                 self.connectedPeripheral = peripheral
@@ -139,44 +140,43 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
           result(false)
       }
     }else if call.method == "writebytes"{
-        guard let arguments = call.arguments as? [Int] else {
-          // Manejar el caso en que los argumentos no son del tipo esperado
-          return
-        }
-        //let bytes = arguments
-        self.bytes = arguments.map { UInt8($0) } //No se esta usando
+        print("Printing from bytes ...")
+        do {
+            let maxRetries = 5
+            let retryInterval: TimeInterval = 0.3 // 300 millisecods interval
+            var currentRetry = 0
 
-        if let characteristic = targetCharacteristic {
-            // Utiliza la variable characteristic desempaquetada aquí
-            //print("bytes count: \(self.bytes?.count)")
-            guard let listbytes = call.arguments as? [UInt8] else {
-                // Manejar el caso en que los argumentos no son del tipo esperado
-                return
+            func performWrite(call: FlutterMethodCall, completion: @escaping (Bool) -> Void) {
+                print("Writing bytes to printer ...")
+                let success = self.writeBytes(call: call)
+                completion(success)
             }
-            //self.connectedPeripheral?.writeValue(Data(listbytes), for: characteristic, type: .withoutResponse) //.withResponse, .withoutResponse
 
-            //Imprimir bloques de 150 bytes en la impresora para que no se sature
-            let data: Data = Data(listbytes) // Datos que deseas imprimir
-            let chunkSize = 150 // Tamaño de cada fragmento en bytes
-
-            var offset = 0
-            while offset < data.count {
-                let chunkRange = offset..<min(offset + chunkSize, data.count)
-                let chunkData = data.subdata(in: chunkRange)
-                //print("chunkData count: \(chunkData.count)")
-                // Envía el fragmento para imprimir utilizando la característica deseada
-                self.connectedPeripheral?.writeValue(chunkData, for: characteristic, type: .withoutResponse)
-
-                offset += chunkSize
+            func retryWrite() {
+                performWrite(call: call) { success in
+                    if success {
+                        print("Bytes sent to printer successfully")
+                        result(true)
+                    } else {
+                        print("Failed sending bytes to printer. Attempt: \(currentRetry + 1).")
+                        currentRetry += 1
+                        if currentRetry < maxRetries {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + retryInterval) {
+                                retryWrite()
+                            }
+                        } else {
+                            print("Max retry attempts reached.")
+                            result(false)
+                        }
+                    }
+                }
             }
-            //la respuesta va en peripheral
-            //self.flutterResult?(true)
-        } else {
-            print("No hay caracteristica para imprimir")
+            retryWrite()
+        } catch {
+            print("Unknown printing error")
             result(false)
         }
-
-      } else if call.method == "printstring"{
+    } else if call.method == "printstring"{
         self.stringprint = call.arguments as! String
         //print("llego a printstring\(self.stringprint)")
         if let characteristic = targetCharacteristic {
@@ -225,13 +225,19 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
             result(false)
         }
         } else if call.method == "disconnect"{
-        centralManager?.cancelPeripheralConnection(connectedPeripheral)
-        targetCharacteristic = nil
-        //la respuesta va en centralManager segunda funcion
-        //result(true)
-      } else {
-        result(FlutterMethodNotImplemented) // Si se llama otro método que no está implementado, se devuelve un error
-      }
+            print("Disconnecting printer ...")
+            if centralManager != nil && connectedPeripheral != nil {
+                centralManager?.cancelPeripheralConnection(connectedPeripheral)
+            } else {
+                print("No printer available to disconnect")
+                result(false)
+            }
+            targetCharacteristic = nil
+            //la respuesta va en centralManager segunda funcion
+            result(true)
+        } else {
+            result(FlutterMethodNotImplemented) // Si se llama otro método que no está implementado, se devuelve un error
+        }
   }
 
   
@@ -267,23 +273,16 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
 
            if let services = peripheral.services {
                for service in services {
-                   print("Service discovered: \(service.uuid)")
+                //    print("Service discovered: \(service.uuid)")
 
-                   // Verifica si el servicio es el que estás buscando
                    let targetServiceUUID = CBUUID(string: "00001101-0000-1000-8000-00805F9B34FB")
                    let targetServiceUUID2 =  CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455")
                    if service.uuid == targetServiceUUID || service.uuid == targetServiceUUID2 {
-                       print("Service found: \(service.uuid)") 
-                       // Por ejemplo, puedes descubrir las características del servicio
-                       peripheral.discoverCharacteristics(nil, for: service)
-
-                       // También puedes almacenar el servicio en una variable para futuras referencias
-                       // targetService = service
+                       print("Service found: \(service.uuid)");
                        self.targetService = service;
-                   }
 
-                   // Aquí puedes realizar operaciones adicionales con cada servicio encontrado, como descubrir características
-                   peripheral.discoverCharacteristics(nil, for: service)
+                       self.connectedPeripheral.discoverCharacteristics(nil, for: service)
+                   }
                }
            }
     }
@@ -297,13 +296,13 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
 
         if let discoveredCharacteristics = service.characteristics {
             for characteristic in discoveredCharacteristics {
-                //print("characteristics found: \(characteristic.uuid)")
+                // print("characteristics found: \(characteristic.uuid)")
                 if let characteristic = targetCharacteristic {
-                    if characteristic.properties.contains(.write) {
-                        // La característica admite escritura
+                    if characteristic.properties.contains(.writeWithoutResponse) {
+                        print("characteristics found: \(characteristic.uuid) La característica admite escritura sin respuesta")
+                    } else if characteristic.properties.contains(.write) {
                         print("characteristics found: \(characteristic.uuid) La característica admite escritura")
                     } else {
-                        // La característica no admite escritura
                         print("characteristics found: \(characteristic.uuid) La característica no admite escritura")
                     }
                 }
@@ -312,8 +311,8 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
                 let targetCharacteristicUUID2 =  CBUUID(string: "49535343-8841-43F4-A8D4-ECBE34729BB3")
 
                 if characteristic.uuid == targetCharacteristicUUID || characteristic.uuid == targetCharacteristicUUID2 {
-                    targetCharacteristic = characteristic // Guarda la característica objetivo en la variable global
                     print("Target characteristic found: \(characteristic.uuid)")
+                    self.targetCharacteristic = characteristic
                     break
                 }
             }
@@ -358,6 +357,41 @@ public class SwiftPrintBluetoothThermalPlugin: NSObject, CBCentralManagerDelegat
         }
     }
 
+    public func writeBytes(call: FlutterMethodCall) -> Bool {
+        guard let arguments = call.arguments as? [Int] else {
+          // Manejar el caso en que los argumentos no son del tipo esperado
+          return false
+        }
+        //let bytes = arguments
+        self.bytes = arguments.map { UInt8($0) } //No se esta usando
+
+        if let characteristic = targetCharacteristic {
+            // Utiliza la variable characteristic desempaquetada aquí
+            //print("bytes count: \(self.bytes?.count)")
+            guard let listbytes = call.arguments as? [UInt8] else {
+                // Manejar el caso en que los argumentos no son del tipo esperado
+                return false
+            }
+            //self.connectedPeripheral?.writeValue(Data(listbytes), for: characteristic, type: .withoutResponse) //.withResponse, .withoutResponse
+
+            //Imprimir bloques de 150 bytes en la impresora para que no se sature
+            let data: Data = Data(listbytes) // Datos que deseas imprimir
+            let chunkSize = 150 // Tamaño de cada fragmento en bytes
+
+            var offset = 0
+            while offset < data.count {
+                let chunkRange = offset..<min(offset + chunkSize, data.count)
+                let chunkData = data.subdata(in: chunkRange)
+                //print("chunkData count: \(chunkData.count)")
+                // Envía el fragmento para imprimir utilizando la característica deseada
+                self.connectedPeripheral?.writeValue(chunkData, for: characteristic, type: .withoutResponse)
+
+                offset += chunkSize
+            }
+            return true
+        } else {
+            print("Characteristics not found.")
+            return false
+        }
+    }
 }
-
-

@@ -68,6 +68,7 @@ class PrintBluetoothThermalPlugin: FlutterPlugin, MethodCallHandler{
     var androidVersion:String = android.os.Build.VERSION.RELEASE;
     activeResult = result
     permissionGranted = ContextCompat.checkSelfPermission(mContext,Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
     if(call.method == "ispermissionbluetoothgranted"){
       var permission: Boolean = true;
       if(sdkversion >= 31){
@@ -248,18 +249,17 @@ class PrintBluetoothThermalPlugin: FlutterPlugin, MethodCallHandler{
       }else{
         result.success(false)
       }
-    }else if (call.method == "pairedbluetooths") {
+    } else if (call.method == "pairedbluetooths") {
       var lista:List<String> = dispositivosVinculados()
 
       result.success(lista)
     }else if(call.method == "disconnect"){
+      println("Disconnecting printer ...")
       if(outputStream != null){
         outputStream?.close()
         outputStream = null
-        result.success(true);
-      }else{
-        result.success(true);
       }
+      result.success(true);
     }else {
       result.notImplemented()
     }
@@ -313,10 +313,6 @@ class PrintBluetoothThermalPlugin: FlutterPlugin, MethodCallHandler{
       }
       outputStream
     }
-  }
-
-  private fun disconncet(){
-    outputStream?.close()
   }
 
   private fun dispositivosVinculados():List<String>{
@@ -415,6 +411,4 @@ class PrintBluetoothThermalPlugin: FlutterPlugin, MethodCallHandler{
   override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
   }
-
-
 }
